@@ -180,6 +180,7 @@ sheet_rows = [
     ("Niezg_5_KOR_BrakNr",  "invoice_type=Kor, data_wyst_fa > 01.02.2026:  brak nr_fa_korygowanej lub nr_ksef_fa_korygowanej.", RED_L),
     ("Niezg_6_Daty_2M",     "invoice_type=Vat:  data_dokumentu SAP jest o więcej niż 2 miesiące późniejsza niż p6_do (lub p6).", RED_L),
     ("Niezg_7_Pozny_Okres",  "invoice_type=Vat:  p6_do (lub p6) jest w późniejszym miesiącu niż data_dokumentu SAP.", RED_L),
+    ("Niezg_8_Kor_Ta_Sama_Wartosc", "Korekta_Faktura Ta Sama Wartość: dokumenty Vat i Kor z tym samym issue_date i buyer_value, gdzie vat_amount jest identyczny co do wartości absolutnej (pomijając znak +/-).", RED_L),
 ]
 
 pdf.set_text_color(*BLACK)
