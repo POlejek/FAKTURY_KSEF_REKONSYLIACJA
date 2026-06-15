@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+
+# Build artifacts (PyInstaller)
+build/
+dist/
+*.exe
+
+# Data / database
+*.db
+
+# Business data folders
+Archiwum/
+KSEF faktury/
+Raporty/
+ANITA/
+SAP Faktury/
+
+# OS / editor
+desktop.ini
+.vscode/
