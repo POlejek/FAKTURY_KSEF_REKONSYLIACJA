@@ -293,6 +293,39 @@ def _discrepancies(df_raw: pd.DataFrame, df_sap_all: pd.DataFrame) -> dict[str, 
     }
 
 
+def _to_num(s: pd.Series) -> pd.Series:
+    """Konwertuje kolumnę na liczby (NaN dla pustych/błędnych)."""
+    return pd.to_numeric(s, errors="coerce")
+
+
+def _korekta_faktura_ta_sama_wartosc(df_ksef: pd.DataFrame) -> pd.DataFrame:
+    """Reguła 8 — Korekta_Faktura Ta Sama Wartość.
+
+    Dokumenty o różnym invoice_type (Vat / Kor), tym samym issue_date i tym
+    samym buyer_value, gdzie vat_amount jest taki sam co do wartości
+    absolutnej (pomijając znak +/-).
+    """
+    ksef = df_ksef[KSEF_LOAD_COLS].rename(columns={"plik_zrodlowy": "plik_ksef"})
+    ksef = ksef[ksef["invoice_type"].isin(["Vat", "Kor"])].copy()
+    ksef["_abs_vat"] = _to_num(ksef["vat_amount"]).abs()
+
+    valid = ksef[
+        (~_empty(ksef["issue_date"])) &
+        (~_empty(ksef["buyer_value"])) &
+        ksef["_abs_vat"].notna()
+    ]
+
+    matched_idx = set()
+    for _, group in valid.groupby(["issue_date", "buyer_value", "_abs_vat"]):
+        types = set(group["invoice_type"])
+        if "Vat" in types and "Kor" in types:
+            matched_idx.update(group.index)
+
+    result = ksef.loc[sorted(matched_idx)].drop(columns=["_abs_vat"])
+    result = result.sort_values(["issue_date", "buyer_value", "invoice_type"], ignore_index=True)
+    return _disc_cols(result)
+
+
 # ── Formatowanie arkusza ──────────────────────────────────────────────────────
 def _format_sheet(ws, status_col_idx: int | None = None) -> None:
     """Nagłówek + szerokości kolumn + filtr. Kolorowanie przez ConditionalFormatting."""
@@ -387,6 +420,7 @@ def main():
 
     print("Obliczanie niezgodnosci ...", end=" ", flush=True)
     disc = _discrepancies(df_raw, df_sap)
+    disc["Niezg_8_Kor_Ta_Sama_Wartosc"] = _korekta_faktura_ta_sama_wartosc(df_ksef)
     print("OK")
 
     df_sum   = _make_summary(conn, df_all)
