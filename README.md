@@ -6,6 +6,18 @@ Pełna instrukcja użytkownika (foldery, Importuj/Raport/Ekstrakt): `_system/Dok
 
 Ten plik opisuje **proces deweloperski** — co robić po kolei, gdy trzeba wdrożyć nowy scenariusz/zmianę w kodzie.
 
+## Ściąga — co wpisać w terminalu VS Code po zmianie w kodzie
+
+```
+cd _system
+build.bat
+cd ..
+git add .
+git commit -m "Opis zmiany"
+git push origin main
+```
+Na koniec skopiuj nowe `Importuj.exe`, `Raport.exe`, `Ekstrakt.exe` (są już w `_system\` i w głównym folderze) do folderu współdzielonego dla użytkowników.
+
 ## Struktura repo
 
 ```
