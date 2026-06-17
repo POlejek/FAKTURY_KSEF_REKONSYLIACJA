@@ -326,6 +326,16 @@ def _korekta_faktura_ta_sama_wartosc(df_ksef: pd.DataFrame) -> pd.DataFrame:
     return _disc_cols(result)
 
 
+def _tylko_ksef_zero_z_p6(df_ksef_only: pd.DataFrame) -> pd.DataFrame:
+    """Reguła 9 — Tylko KSeF: Kwota netto = Kwota brutto = VAT = 0, ale P_6_Do lub P_6 wypełnione."""
+    netto  = _to_num(df_ksef_only["Kwota netto"])
+    brutto = _to_num(df_ksef_only["Kwota brutto"])
+    vat    = _to_num(df_ksef_only["VAT"])
+    ma_p6  = (~_empty(df_ksef_only["P_6_Do"])) | (~_empty(df_ksef_only["P_6"]))
+    mask   = (netto == 0) & (brutto == 0) & (vat == 0) & ma_p6
+    return df_ksef_only[mask].reset_index(drop=True)
+
+
 # ── Formatowanie arkusza ──────────────────────────────────────────────────────
 def _format_sheet(ws, status_col_idx: int | None = None) -> None:
     """Nagłówek + szerokości kolumn + filtr. Kolorowanie przez ConditionalFormatting."""
@@ -429,6 +439,8 @@ def main():
     df_match = df_all[df_all["Status"] == "DOPASOWANE"]
     df_sap_  = df_all[df_all["Status"] == "TYLKO SAP"]
     df_ksef_ = df_all[df_all["Status"] == "TYLKO KSeF"]
+
+    disc["Niezg_9_TylkoKSeF_ZeroP6"] = _tylko_ksef_zero_z_p6(df_ksef_)
 
     print(f"  Dopasowane : {len(df_match):>6,}")
     print(f"  Tylko SAP  : {len(df_sap_):>6,}")
