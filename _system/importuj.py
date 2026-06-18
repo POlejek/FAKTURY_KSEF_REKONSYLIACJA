@@ -105,6 +105,16 @@ CREATE TABLE IF NOT EXISTS import_log (
     wiersze_pominiete INTEGER,
     status            TEXT
 );
+
+CREATE TABLE IF NOT EXISTS wyjatki_akceptacja (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    regula          TEXT NOT NULL,
+    numer_dokumentu TEXT NOT NULL DEFAULT '',
+    invoice_number  TEXT NOT NULL DEFAULT '',
+    komentarz       TEXT NOT NULL,
+    data_akceptacji TEXT NOT NULL,
+    UNIQUE(regula, numer_dokumentu, invoice_number)
+);
 """
 
 

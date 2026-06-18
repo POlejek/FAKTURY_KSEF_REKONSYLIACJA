@@ -16,7 +16,11 @@ git add .
 git commit -m "Opis zmiany"
 git push origin main
 ```
+<<<<<<< HEAD
 Na koniec skopiuj nowe `Importuj.exe`, `Raport.exe`, `Ekstrakt.exe` (są już w `_system\` i w głównym folderze) do folderu współdzielonego dla użytkowników.
+=======
+Na koniec skopiuj nowe `Importuj.exe`, `Raport.exe`, `Ekstrakt.exe`, `Wyjatki.exe` (są już w `_system\` i w głównym folderze) do folderu współdzielonego dla użytkowników.
+>>>>>>> f5f122681ef1ae6bf2ea27bea0d10abe24faf104
 
 ## Struktura repo
 
@@ -28,7 +32,12 @@ _system/
   generuj_doc.py       ← generuje Dokumentacja_Lyreco_SAP_KSeF_v5.pdf
   *.spec               ← konfiguracje PyInstaller
   requirements.txt
+<<<<<<< HEAD
   build.bat             ← instaluje zależności + buduje 3 .exe
+=======
+  wyjatki.py            ← akceptowanie/odznaczanie wyjątków niezgodności (Wyjatki.exe)
+  build.bat             ← instaluje zależności + buduje 4 .exe
+>>>>>>> f5f122681ef1ae6bf2ea27bea0d10abe24faf104
 faktury.db, Archiwum/, Raporty/, SAP Faktury/, KSEF faktury/  ← dane lokalne, w .gitignore
 ```
 
@@ -56,7 +65,11 @@ Z folderu `_system\`:
 ```
 build.bat
 ```
+<<<<<<< HEAD
 Skrypt: instaluje zależności → czyści `build\`/`dist\` → buduje `Importuj.exe`, `Raport.exe`, `Ekstrakt.exe` → kopiuje je do `_system\` i do folderu głównego.
+=======
+Skrypt: instaluje zależności → czyści `build\`/`dist\` → buduje `Importuj.exe`, `Raport.exe`, `Ekstrakt.exe`, `Wyjatki.exe` → kopiuje je do `_system\` i do folderu głównego. Każda nowa funkcja (np. mechanizm wyjątków) wymaga jedynie uruchomienia `build.bat` ponownie — skrypt buduje wszystkie 4 aplikacje automatycznie, bez dodatkowych kroków manualnych.
+>>>>>>> f5f122681ef1ae6bf2ea27bea0d10abe24faf104
 
 ### 5. Commit i push na `main`
 Repo trzyma tylko jeden roboczy branch — `main`. Niewielkie, samodzielne zmiany (jak nowa reguła, poprawka dokumentacji) commitujemy bezpośrednio na `main`:
@@ -68,7 +81,11 @@ git push origin main
 Dla większych/ryzykownych zmian rozważ branch + Pull Request (review przed mergem), ale domyślny przepływ w tym repo to praca na `main`.
 
 ### 6. Rozdystrybuuj nowe .exe do użytkowników
+<<<<<<< HEAD
 Pliki `Importuj.exe`, `Raport.exe`, `Ekstrakt.exe` (w `_system\` i w folderze głównym) trzeba ręcznie skopiować do folderu współdzielonego (SharePoint/Teams) używanego przez użytkowników — repozytorium git nie dystrybuuje plików `.exe` automatycznie (są w `.gitignore`).
+=======
+Pliki `Importuj.exe`, `Raport.exe`, `Ekstrakt.exe`, `Wyjatki.exe` (w `_system\` i w folderze głównym) trzeba ręcznie skopiować do folderu współdzielonego (SharePoint/Teams) używanego przez użytkowników — repozytorium git nie dystrybuuje plików `.exe` automatycznie (są w `.gitignore`).
+>>>>>>> f5f122681ef1ae6bf2ea27bea0d10abe24faf104
 
 ## Czego NIE commitować
 `.gitignore` już wyklucza:
