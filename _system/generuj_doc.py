@@ -182,6 +182,7 @@ sheet_rows = [
     ("Niezg_7_Pozny_Okres",  "invoice_type=Vat:  p6_do (lub p6) jest w późniejszym miesiącu niż data_dokumentu SAP.", RED_L),
     ("Niezg_8_Kor_Ta_Sama_Wartosc", "Korekta_Faktura Ta Sama Wartość: dokumenty Vat i Kor z tym samym issue_date i buyer_value, gdzie vat_amount jest identyczny co do wartości absolutnej (pomijając znak +/-).", RED_L),
     ("Niezg_9_TylkoKSeF_ZeroP6", "Tylko KSeF: Kwota netto = Kwota brutto = VAT = 0, ale P_6_Do (lub P_6) jest wypełnione.", RED_L),
+    ("Wyjatki_Zaakceptowane", "Lista wszystkich aktywnych zaakceptowanych wyjątków (regula, dokumenty, komentarz, data akceptacji).", LGRAY),
 ]
 
 pdf.set_text_color(*BLACK)
@@ -217,8 +218,38 @@ ekst_steps = [
 for label, desc in ekst_steps:
     pdf.step(label, desc)
 
-# ── 6. LOGIKA ŁĄCZENIA ────────────────────────────────────────────────────────
-pdf.h1("6. Logika łączenia SAP ↔ KSeF")
+# ── 6. WYJATKI.EXE ────────────────────────────────────────────────────────────
+pdf.h1("6. Wyjatki.exe – akceptowanie i przegląd wyjątków")
+pdf.body(
+    "Niektóre niezgodności są znane i biznesowo wyjaśnione – nie trzeba, żeby pojawiały się "
+    "w każdym kolejnym raporcie. Wyjatki.exe pozwala oznaczyć wybraną pozycję (z dowolnej "
+    "zakładki Niezg_1..Niezg_9 oraz Tylko_SAP / Tylko_KSeF) jako zaakceptowany wyjątek "
+    "wraz z komentarzem, a także przejrzeć i odznaczyć wyjątki w razie pomyłki."
+)
+pdf.ln(1)
+wyj_steps = [
+    ("Krok 1", "Wybierz opcję [1] z menu, aby przeglądnąć bieżące niezgodności pogrupowane "
+               "po zakładkach (Niezg_1..Niezg_9, Tylko_SAP, Tylko_KSeF)."),
+    ("Krok 2", "Dla wybranej zakładki wpisz numery pozycji do zaakceptowania (np. 1,3) "
+               "lub naciśnij Enter, aby pominąć tę zakładkę."),
+    ("Krok 3", "Dla każdej zaakceptowanej pozycji wpisz komentarz wyjaśniający – "
+               "pole jest wymagane, nie można go pozostawić puste."),
+    ("Krok 4", "Wybierz opcję [2], aby przeglądnąć listę już zaakceptowanych wyjątków "
+               "i odznaczyć wybrane (po potwierdzeniu T/N) – wrócą one do kolejnego raportu."),
+]
+for label, desc in wyj_steps:
+    pdf.step(label, desc)
+pdf.ln(1)
+pdf.body(
+    "Zaakceptowane wyjątki nie pojawiają się ponownie w zakładkach Niezg_1..Niezg_9 w Raport.exe. "
+    "Zakładki Tylko_SAP i Tylko_KSeF w raporcie zawsze pokazują wszystkie pozycje (pełna "
+    "inwentaryzacja), ale zaakceptowane wiersze mają wypełnioną kolumnę Wyjatek_Komentarz. "
+    "Pełna lista aktywnych wyjątków jest też widoczna w zakładce Wyjatki_Zaakceptowane raportu.",
+    indent=0,
+)
+
+# ── 7. LOGIKA ŁĄCZENIA ────────────────────────────────────────────────────────
+pdf.h1("7. Logika łączenia SAP ↔ KSeF")
 pdf.kv("Rodzaj dokumentu RV",        "SAP.klucz_referencyjny  =  KSeF.invoice_number")
 pdf.kv("Rodzaj DR (i pozostałe)",    "SAP.referencja  =  KSeF.invoice_number")
 pdf.ln(1)
@@ -227,11 +258,11 @@ pdf.body(
     "Faktury w SAP bez odpowiednika w KSeF trafiają do zakładki Tylko_SAP.", indent=0
 )
 
-# ── 7. WSKAZÓWKI ──────────────────────────────────────────────────────────────
-pdf.h1("7. Wskazówki praktyczne")
+# ── 8. WSKAZÓWKI ──────────────────────────────────────────────────────────────
+pdf.h1("8. Wskazówki praktyczne")
 tips = [
     "Nie usuwaj ani nie przenoś pliku faktury.db – to główna baza danych systemu.",
-    "Importuj.exe, Raport.exe i Ekstrakt.exe muszą być uruchamiane z folderu _system\\ "
+    "Importuj.exe, Raport.exe, Ekstrakt.exe i Wyjatki.exe muszą być uruchamiane z folderu _system\\ "
     "(lub przez dwuklik – ścieżki są względne i działają automatycznie).",
     "Jeżeli ten sam plik SAP zostanie wrzucony ponownie: rekordy bez zmian będą pominięte, "
     "zmienione – zaktualizowane.",

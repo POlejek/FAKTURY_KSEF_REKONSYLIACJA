@@ -58,6 +58,55 @@ def _ensure_indexes(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+# ── Wyjątki (akceptowane niezgodności) ─────────────────────────────────────────
+def _ensure_wyjatki_table(conn: sqlite3.Connection) -> None:
+    """Tworzy tabelę wyjątków, jeśli baza powstała przed dodaniem tej funkcji."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS wyjatki_akceptacja (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            regula          TEXT NOT NULL,
+            numer_dokumentu TEXT NOT NULL DEFAULT '',
+            invoice_number  TEXT NOT NULL DEFAULT '',
+            komentarz       TEXT NOT NULL,
+            data_akceptacji TEXT NOT NULL,
+            UNIQUE(regula, numer_dokumentu, invoice_number)
+        )
+    """)
+    conn.commit()
+
+
+def _load_accepted(conn: sqlite3.Connection) -> dict[tuple[str, str, str], str]:
+    """Zwraca {(regula, numer_dokumentu, invoice_number): komentarz} dla aktywnych wyjątków."""
+    rows = conn.execute(
+        "SELECT regula, numer_dokumentu, invoice_number, komentarz FROM wyjatki_akceptacja"
+    ).fetchall()
+    return {(r[0], r[1], r[2]): r[3] for r in rows}
+
+
+def _keys_for(df: pd.DataFrame, regula: str) -> list[tuple[str, str, str]]:
+    """Buduje listę kluczy (regula, Nr dok. SAP, Nr faktury KSeF) dla wierszy df."""
+    key_a = df["Nr dok. SAP"] if "Nr dok. SAP" in df.columns else pd.Series([""] * len(df), index=df.index)
+    key_b = df["Nr faktury KSeF"] if "Nr faktury KSeF" in df.columns else pd.Series([""] * len(df), index=df.index)
+    return list(zip([regula] * len(df), key_a.fillna("").astype(str), key_b.fillna("").astype(str)))
+
+
+def _filter_accepted(df: pd.DataFrame, regula: str, accepted: dict) -> pd.DataFrame:
+    """Usuwa z df wiersze, których klucz (regula, Nr dok. SAP, Nr faktury KSeF) jest w accepted."""
+    if df.empty:
+        return df
+    keys = _keys_for(df, regula)
+    mask = [k not in accepted for k in keys]
+    return df[mask].reset_index(drop=True)
+
+
+def _wyjatek_komentarz_col(df: pd.DataFrame, regula: str, accepted: dict) -> pd.Series:
+    """Zwraca Series z komentarzem wyjątku dla wierszy zaakceptowanych, '' dla pozostałych."""
+    if df.empty:
+        return pd.Series([], dtype=str, index=df.index)
+    keys = _keys_for(df, regula)
+    return pd.Series([accepted.get(k, "") for k in keys], index=df.index)
+
+
 # ── Rekoncyliacja w pandas ────────────────────────────────────────────────────
 SAP_LOAD_COLS  = [
     "rok_obrotowy", "okres_sprawozdawczy", "rodzaj_dokumentu",
@@ -394,6 +443,43 @@ FROM import_log ORDER BY data_importu DESC LIMIT 1000
 """
 
 
+def compute_report_data(
+    conn: sqlite3.Connection,
+) -> tuple[pd.DataFrame, dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Wczytuje dane i liczy rekoncyliację.
+
+    Zwraca (df_all, disc, df_log, df_sap_full, df_ksef_full):
+      df_all      – wszystkie rekordy (DOPASOWANE + TYLKO SAP + TYLKO KSeF), nieprzefiltrowane.
+      disc        – 11 kategorii (Niezg_1..Niezg_9, Tylko_SAP, Tylko_KSeF), już odfiltrowane
+                    o zaakceptowane wyjątki — jednolity zbiór do raportu i do Wyjatki.exe.
+      df_log      – log importu.
+      df_sap_full, df_ksef_full – pełne (nieprzefiltrowane) "Tylko SAP"/"Tylko KSeF",
+                    do głównych zakładek inwentaryzacyjnych raportu.
+    """
+    _ensure_wyjatki_table(conn)
+
+    df_sap  = pd.read_sql("SELECT * FROM faktury_sap",  conn)
+    df_ksef = pd.read_sql("SELECT * FROM faktury_ksef", conn)
+    df_log  = pd.read_sql(SQL_LOG, conn)
+
+    df_raw, df_all = _reconcile(df_sap, df_ksef)
+
+    disc = _discrepancies(df_raw, df_sap)
+    disc["Niezg_8_Kor_Ta_Sama_Wartosc"] = _korekta_faktura_ta_sama_wartosc(df_ksef)
+
+    df_sap_full  = df_all[df_all["Status"] == "TYLKO SAP"].reset_index(drop=True)
+    df_ksef_full = df_all[df_all["Status"] == "TYLKO KSeF"].reset_index(drop=True)
+
+    disc["Niezg_9_TylkoKSeF_ZeroP6"] = _tylko_ksef_zero_z_p6(df_ksef_full)
+    disc["Tylko_SAP"]  = df_sap_full
+    disc["Tylko_KSeF"] = df_ksef_full
+
+    accepted = _load_accepted(conn)
+    disc = {name: _filter_accepted(df_d, name, accepted) for name, df_d in disc.items()}
+
+    return df_all, disc, df_log, df_sap_full, df_ksef_full
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     print("=" * 62)
@@ -414,57 +500,64 @@ def main():
     conn = sqlite3.connect(DB_PATH)
     _ensure_indexes(conn)
 
-    print("\nWczytywanie SAP ...", end=" ", flush=True)
-    df_sap  = pd.read_sql("SELECT * FROM faktury_sap",  conn)
-    print(f"{len(df_sap):,} wierszy")
-
-    print("Wczytywanie KSeF ...", end=" ", flush=True)
-    df_ksef = pd.read_sql("SELECT * FROM faktury_ksef", conn)
-    print(f"{len(df_ksef):,} wierszy")
-
-    df_log = pd.read_sql(SQL_LOG, conn)
-
-    print("Laczenie danych ...", end=" ", flush=True)
-    df_raw, df_all = _reconcile(df_sap, df_ksef)
+    print("\nWczytywanie i laczenie danych ...", end=" ", flush=True)
+    df_all, disc, df_log, df_sap_full, df_ksef_full = compute_report_data(conn)
     print("OK")
 
-    print("Obliczanie niezgodnosci ...", end=" ", flush=True)
-    disc = _discrepancies(df_raw, df_sap)
-    disc["Niezg_8_Kor_Ta_Sama_Wartosc"] = _korekta_faktura_ta_sama_wartosc(df_ksef)
-    print("OK")
-
+    accepted = _load_accepted(conn)
     df_sum   = _make_summary(conn, df_all)
     conn.close()
 
     df_match = df_all[df_all["Status"] == "DOPASOWANE"]
-    df_sap_  = df_all[df_all["Status"] == "TYLKO SAP"]
-    df_ksef_ = df_all[df_all["Status"] == "TYLKO KSeF"]
 
-    disc["Niezg_9_TylkoKSeF_ZeroP6"] = _tylko_ksef_zero_z_p6(df_ksef_)
+    # Zakładki Tylko_SAP / Tylko_KSeF w głównym raporcie pokazują WSZYSTKIE rekordy
+    # (inwentaryzacja) — z dodatkową kolumną komentarza dla pozycji już zaakceptowanych.
+    df_sap_  = df_sap_full.copy()
+    df_ksef_ = df_ksef_full.copy()
+    df_sap_["Wyjatek_Komentarz"]  = _wyjatek_komentarz_col(df_sap_full,  "Tylko_SAP",  accepted)
+    df_ksef_["Wyjatek_Komentarz"] = _wyjatek_komentarz_col(df_ksef_full, "Tylko_KSeF", accepted)
+
+    # Niezg_X w disc to wersje już odfiltrowane o zaakceptowane wyjątki (do excela).
+    disc_report = {k: v for k, v in disc.items() if k not in ("Tylko_SAP", "Tylko_KSeF")}
+
+    df_wyjatki = pd.DataFrame(
+        [
+            {
+                "Regula":          regula,
+                "Nr dok. SAP":     nr_dok,
+                "Nr faktury KSeF": inv,
+                "Komentarz":       komentarz,
+            }
+            for (regula, nr_dok, inv), komentarz in accepted.items()
+        ]
+    ).sort_values(["Regula"], ignore_index=True) if accepted else pd.DataFrame(
+        columns=["Regula", "Nr dok. SAP", "Nr faktury KSeF", "Komentarz"]
+    )
 
     print(f"  Dopasowane : {len(df_match):>6,}")
     print(f"  Tylko SAP  : {len(df_sap_):>6,}")
     print(f"  Tylko KSeF : {len(df_ksef_):>6,}")
-    for name, df_d in disc.items():
+    for name, df_d in disc_report.items():
         print(f"  {name:<22}: {len(df_d):>6,}")
 
     status_col = list(df_all.columns).index("Status") + 1  # 1-indexed
 
     print(f"\nZapis Excel + formatowanie: {out_path.name} ...", end=" ", flush=True)
     with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
-        df_sum.to_excel(writer,   sheet_name="Podsumowanie", index=False)
-        df_sap_.to_excel(writer,  sheet_name="Tylko_SAP",    index=False)
-        df_ksef_.to_excel(writer, sheet_name="Tylko_KSeF",   index=False)
-        df_log.to_excel(writer,   sheet_name="Log_importu",  index=False)
-        for sheet_name, df_d in disc.items():
+        df_sum.to_excel(writer,     sheet_name="Podsumowanie", index=False)
+        df_sap_.to_excel(writer,    sheet_name="Tylko_SAP",    index=False)
+        df_ksef_.to_excel(writer,   sheet_name="Tylko_KSeF",   index=False)
+        df_log.to_excel(writer,     sheet_name="Log_importu",  index=False)
+        df_wyjatki.to_excel(writer, sheet_name="Wyjatki_Zaakceptowane", index=False)
+        for sheet_name, df_d in disc_report.items():
             df_d.to_excel(writer, sheet_name=sheet_name, index=False)
 
         wb = writer.book
         for name in ("Tylko_SAP", "Tylko_KSeF"):
             _format_sheet(wb[name], status_col)
-        for name in ("Podsumowanie", "Log_importu"):
+        for name in ("Podsumowanie", "Log_importu", "Wyjatki_Zaakceptowane"):
             _format_sheet(wb[name])
-        for name in disc:
+        for name in disc_report:
             _format_sheet(wb[name])
     print("OK")
 
