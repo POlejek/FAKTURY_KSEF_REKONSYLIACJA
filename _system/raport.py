@@ -59,35 +59,88 @@ def _ensure_indexes(conn: sqlite3.Connection) -> None:
 
 
 # ── Wyjątki (akceptowane niezgodności) ─────────────────────────────────────────
+# Kolumny opisowe zapisywane jako "zrzut" stanu pozycji w momencie akceptacji —
+# dzięki temu zakładka "Zaakceptowane wyjątki" pokazuje pełny kontekst nawet
+# po tym, jak dana pozycja zniknie z bieżącego raportu.
+_WYJATKI_SNAPSHOT_COLS = {
+    "rodzaj_dokumentu":  "Rodzaj dok.",
+    "data_dokumentu":    "Data dok. SAP",
+    "data_ksiegowania":  "Data ksiegowania",
+    "referencja_sap":    "Referencja SAP",
+    "data_wystawienia":  "Data wystawienia",
+    "nabywca":           "Nabywca",
+    "kwota_brutto":      "Kwota brutto",
+}
+
+
+def _norm_val(v) -> str:
+    """Normalizuje wartosc komorki do porownywalnego stringa ('' dla pustych/NaN)."""
+    if v is None:
+        return ""
+    try:
+        if pd.isna(v):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    s = str(v).strip()
+    return "" if s.lower() in ("nan", "none", "nat") else s
+
+
 def _ensure_wyjatki_table(conn: sqlite3.Connection) -> None:
-    """Tworzy tabelę wyjątków, jeśli baza powstała przed dodaniem tej funkcji."""
+    """Tworzy tabelę wyjątków, jeśli baza powstała przed dodaniem tej funkcji,
+    i dokłada (migruje) kolumny dodane w późniejszych wersjach."""
     conn.execute("""
         CREATE TABLE IF NOT EXISTS wyjatki_akceptacja (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            regula          TEXT NOT NULL,
-            numer_dokumentu TEXT NOT NULL DEFAULT '',
-            invoice_number  TEXT NOT NULL DEFAULT '',
-            komentarz       TEXT NOT NULL,
-            data_akceptacji TEXT NOT NULL,
-            UNIQUE(regula, numer_dokumentu, invoice_number)
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            regula           TEXT NOT NULL,
+            klucz_laczenia   TEXT NOT NULL DEFAULT '',
+            numer_dokumentu  TEXT NOT NULL DEFAULT '',
+            invoice_number   TEXT NOT NULL DEFAULT '',
+            rodzaj_dokumentu TEXT NOT NULL DEFAULT '',
+            data_dokumentu   TEXT NOT NULL DEFAULT '',
+            data_ksiegowania TEXT NOT NULL DEFAULT '',
+            referencja_sap   TEXT NOT NULL DEFAULT '',
+            data_wystawienia TEXT NOT NULL DEFAULT '',
+            nabywca          TEXT NOT NULL DEFAULT '',
+            kwota_brutto     TEXT NOT NULL DEFAULT '',
+            komentarz        TEXT NOT NULL,
+            data_akceptacji  TEXT NOT NULL,
+            UNIQUE(regula, klucz_laczenia, numer_dokumentu, invoice_number)
         )
     """)
+    existing = {r[1] for r in conn.execute("PRAGMA table_info(wyjatki_akceptacja)").fetchall()}
+    migration_cols = ["klucz_laczenia"] + list(_WYJATKI_SNAPSHOT_COLS.keys())
+    for col in migration_cols:
+        if col not in existing:
+            conn.execute(f"ALTER TABLE wyjatki_akceptacja ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_wyjatki_key "
+        "ON wyjatki_akceptacja(regula, klucz_laczenia, numer_dokumentu, invoice_number)"
+    )
     conn.commit()
 
 
-def _load_accepted(conn: sqlite3.Connection) -> dict[tuple[str, str, str], str]:
-    """Zwraca {(regula, numer_dokumentu, invoice_number): komentarz} dla aktywnych wyjątków."""
+def _load_accepted(conn: sqlite3.Connection) -> dict[tuple[str, str, str, str], str]:
+    """Zwraca {(regula, Klucz laczenia, Nr dok. SAP, Nr faktury KSeF): komentarz} dla aktywnych wyjątków."""
     rows = conn.execute(
-        "SELECT regula, numer_dokumentu, invoice_number, komentarz FROM wyjatki_akceptacja"
+        "SELECT regula, klucz_laczenia, numer_dokumentu, invoice_number, komentarz FROM wyjatki_akceptacja"
     ).fetchall()
-    return {(r[0], r[1], r[2]): r[3] for r in rows}
+    return {(r[0], r[1], r[2], r[3]): r[4] for r in rows}
 
 
-def _keys_for(df: pd.DataFrame, regula: str) -> list[tuple[str, str, str]]:
-    """Buduje listę kluczy (regula, Nr dok. SAP, Nr faktury KSeF) dla wierszy df."""
-    key_a = df["Nr dok. SAP"] if "Nr dok. SAP" in df.columns else pd.Series([""] * len(df), index=df.index)
-    key_b = df["Nr faktury KSeF"] if "Nr faktury KSeF" in df.columns else pd.Series([""] * len(df), index=df.index)
-    return list(zip([regula] * len(df), key_a.fillna("").astype(str), key_b.fillna("").astype(str)))
+def _keys_for(df: pd.DataFrame, regula: str) -> list[tuple[str, str, str, str]]:
+    """Buduje listę kluczy (regula, Klucz laczenia, Nr dok. SAP, Nr faktury KSeF) dla wierszy df.
+
+    Klucz laczenia jest jedynym polem unikatowym dla każdej pozycji — pozostałe dwa
+    pola zostają w kluczu dla kompatybilności z wcześniej zapisanymi wyjątkami.
+    """
+    def col_or_empty(name: str) -> pd.Series:
+        return df[name] if name in df.columns else pd.Series([""] * len(df), index=df.index)
+
+    key_k = col_or_empty("Klucz laczenia").map(_norm_val)
+    key_a = col_or_empty("Nr dok. SAP").map(_norm_val)
+    key_b = col_or_empty("Nr faktury KSeF").map(_norm_val)
+    return list(zip([regula] * len(df), key_k, key_a, key_b))
 
 
 def _filter_accepted(df: pd.DataFrame, regula: str, accepted: dict) -> pd.DataFrame:
@@ -372,6 +425,9 @@ def _korekta_faktura_ta_sama_wartosc(df_ksef: pd.DataFrame) -> pd.DataFrame:
 
     result = ksef.loc[sorted(matched_idx)].drop(columns=["_abs_vat"])
     result = result.sort_values(["issue_date", "buyer_value", "invoice_type"], ignore_index=True)
+    # Dla wierszy czysto-KSeF jedynym naturalnym kluczem unikatowym jest invoice_number
+    # (tak jak dla Tylko_KSeF w _reconcile) — uzupelniamy klucz_laczenia dla spójności.
+    result["klucz_laczenia"] = result["invoice_number"]
     return _disc_cols(result)
 
 
@@ -504,8 +560,27 @@ def main():
     df_all, disc, df_log, df_sap_full, df_ksef_full = compute_report_data(conn)
     print("OK")
 
-    accepted = _load_accepted(conn)
-    df_sum   = _make_summary(conn, df_all)
+    accepted   = _load_accepted(conn)
+    df_sum     = _make_summary(conn, df_all)
+    df_wyjatki = pd.read_sql(
+        """
+        SELECT regula           AS "Regula",
+               klucz_laczenia   AS "Klucz laczenia",
+               numer_dokumentu  AS "Nr dok. SAP",
+               invoice_number   AS "Nr faktury KSeF",
+               rodzaj_dokumentu AS "Rodzaj dok.",
+               referencja_sap   AS "Referencja SAP",
+               data_dokumentu   AS "Data dok. SAP",
+               data_ksiegowania AS "Data ksiegowania",
+               data_wystawienia AS "Data wystawienia",
+               nabywca          AS "Nabywca",
+               kwota_brutto     AS "Kwota brutto",
+               komentarz        AS "Komentarz",
+               data_akceptacji  AS "Data akceptacji"
+        FROM wyjatki_akceptacja ORDER BY regula, data_akceptacji
+        """,
+        conn,
+    )
     conn.close()
 
     df_match = df_all[df_all["Status"] == "DOPASOWANE"]
@@ -519,20 +594,6 @@ def main():
 
     # Niezg_X w disc to wersje już odfiltrowane o zaakceptowane wyjątki (do excela).
     disc_report = {k: v for k, v in disc.items() if k not in ("Tylko_SAP", "Tylko_KSeF")}
-
-    df_wyjatki = pd.DataFrame(
-        [
-            {
-                "Regula":          regula,
-                "Nr dok. SAP":     nr_dok,
-                "Nr faktury KSeF": inv,
-                "Komentarz":       komentarz,
-            }
-            for (regula, nr_dok, inv), komentarz in accepted.items()
-        ]
-    ).sort_values(["Regula"], ignore_index=True) if accepted else pd.DataFrame(
-        columns=["Regula", "Nr dok. SAP", "Nr faktury KSeF", "Komentarz"]
-    )
 
     print(f"  Dopasowane : {len(df_match):>6,}")
     print(f"  Tylko SAP  : {len(df_sap_):>6,}")
