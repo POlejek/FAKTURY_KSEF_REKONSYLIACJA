@@ -48,7 +48,7 @@ CATEGORY_ORDER = [
 
 
 def _row_columns(df: pd.DataFrame, regula: str) -> list[str]:
-    cols = [c for c in ("Nr dok. SAP", "Nr faktury KSeF") if c in df.columns]
+    cols = [c for c in ("Klucz laczenia", "Nr dok. SAP", "Nr faktury KSeF") if c in df.columns]
     extra = EXTRA_COLS.get(regula, DEFAULT_EXTRA_COLS)
     cols += [c for c in extra if c in df.columns]
     return cols
@@ -67,50 +67,55 @@ def _norm(value) -> str:
     return "" if s.lower() in ("nan", "none", "nat") else s
 
 
-SEARCH_COLS = ["Nr dok. SAP", "Nr faktury KSeF", "Referencja SAP"]
+SEARCH_COLS = ["Klucz laczenia", "Nr dok. SAP", "Nr faktury KSeF", "Referencja SAP"]
 DATE_COL = "Data dok. SAP"
 
+# Pola "zrzutu" zapisywane przy akceptacji wyjątku — kolumna w df -> kolumna w bazie.
+SNAPSHOT_FIELDS = {
+    "Klucz laczenia":    "klucz_laczenia",
+    "Nr dok. SAP":       "numer_dokumentu",
+    "Nr faktury KSeF":   "invoice_number",
+    "Rodzaj dok.":       "rodzaj_dokumentu",
+    "Data dok. SAP":     "data_dokumentu",
+    "Data ksiegowania":  "data_ksiegowania",
+    "Referencja SAP":    "referencja_sap",
+    "Data wystawienia":  "data_wystawienia",
+    "Nabywca":           "nabywca",
+    "Kwota brutto":      "kwota_brutto",
+}
 
-# ── Pomocniczy scrollowany kontener ───────────────────────────────────────────
-class ScrollableFrame(ttk.Frame):
-    def __init__(self, parent, height: int = 320):
-        super().__init__(parent)
-        canvas    = tk.Canvas(self, height=height, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
-        self.inner = ttk.Frame(canvas)
-        self.inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=self.inner, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
 
-
-# ── Okno wpisywania komentarzy (per pozycja, wymagane) ────────────────────────
+# ── Okno wpisywania jednego komentarza dla calego zaznaczenia ────────────────
 class CommentDialog(tk.Toplevel):
     def __init__(self, parent, labels: list[str]):
         super().__init__(parent)
-        self.title("Komentarze do zaakceptowanych pozycji")
-        self.geometry("680x480")
+        self.title("Komentarz do zaakceptowanych pozycji")
+        self.geometry("700x440")
         self.transient(parent)
         self.grab_set()
-        self.result: list[str] | None = None
-        self.entries: list[ttk.Entry] = []
+        self.result: str | None = None
 
         ttk.Label(
-            self, text="Wpisz komentarz dla kazdej pozycji (wymagane):",
+            self, text=f"Zaznaczono {len(labels)} pozycji:",
             font=("", 10, "bold"),
         ).pack(anchor="w", padx=12, pady=(12, 6))
 
-        scroll = ScrollableFrame(self, height=340)
-        scroll.pack(fill="both", expand=True, padx=12)
+        list_frame = ttk.Frame(self)
+        list_frame.pack(fill="both", expand=True, padx=12)
+        text = tk.Text(list_frame, height=12, wrap="word")
+        text.insert("1.0", "\n".join(labels))
+        text.configure(state="disabled")
+        vsb = ttk.Scrollbar(list_frame, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=vsb.set)
+        text.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
 
-        for label in labels:
-            frame = ttk.Frame(scroll.inner)
-            frame.pack(fill="x", pady=5)
-            ttk.Label(frame, text=label, wraplength=600, justify="left").pack(anchor="w")
-            entry = ttk.Entry(frame, width=80)
-            entry.pack(anchor="w", pady=(3, 0), fill="x")
-            self.entries.append(entry)
+        ttk.Label(
+            self, text="Komentarz dla wszystkich zaznaczonych pozycji (wymagany):",
+            font=("", 10, "bold"),
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+        self.comment_entry = ttk.Entry(self, width=90)
+        self.comment_entry.pack(fill="x", padx=12)
 
         btns = ttk.Frame(self)
         btns.pack(fill="x", padx=12, pady=12)
@@ -118,16 +123,15 @@ class CommentDialog(tk.Toplevel):
         ttk.Button(btns, text="Anuluj",  command=self._on_cancel).pack(side="right")
 
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
-        if self.entries:
-            self.entries[0].focus_set()
+        self.comment_entry.focus_set()
         self.wait_window(self)
 
     def _on_save(self):
-        comments = [e.get().strip() for e in self.entries]
-        if any(not c for c in comments):
-            messagebox.showwarning("Brak komentarza", "Kazda pozycja wymaga komentarza.", parent=self)
+        comment = self.comment_entry.get().strip()
+        if not comment:
+            messagebox.showwarning("Brak komentarza", "Komentarz jest wymagany.", parent=self)
             return
-        self.result = comments
+        self.result = comment
         self.destroy()
 
     def _on_cancel(self):
@@ -279,9 +283,21 @@ class WyjatkiApp(tk.Tk):
         ttk.Button(top, text="Odswiez",             command=self._reload_accepted).pack(side="left")
         ttk.Button(top, text="Odznacz zaznaczone",  command=self._unaccept_selected).pack(side="left", padx=10)
 
-        cols    = ("regula", "dokumenty", "komentarz", "data")
-        headers = {"regula": "Regula", "dokumenty": "Dokumenty", "komentarz": "Komentarz", "data": "Data akceptacji"}
-        widths  = {"regula": 220, "dokumenty": 220, "komentarz": 360, "data": 140}
+        cols = (
+            "regula", "klucz", "sap", "ksef", "rodzaj", "referencja",
+            "data_dok", "data_ksieg", "data_wyst", "nabywca", "brutto", "komentarz", "data",
+        )
+        headers = {
+            "regula": "Regula", "klucz": "Klucz laczenia", "sap": "Nr dok. SAP", "ksef": "Nr faktury KSeF",
+            "rodzaj": "Rodzaj dok.", "referencja": "Referencja SAP", "data_dok": "Data dok. SAP",
+            "data_ksieg": "Data ksiegowania", "data_wyst": "Data wystawienia", "nabywca": "Nabywca",
+            "brutto": "Kwota brutto", "komentarz": "Komentarz", "data": "Data akceptacji",
+        }
+        widths = {
+            "regula": 200, "klucz": 140, "sap": 120, "ksef": 140, "rodzaj": 90, "referencja": 130,
+            "data_dok": 100, "data_ksieg": 100, "data_wyst": 100, "nabywca": 160, "brutto": 100,
+            "komentarz": 280, "data": 140,
+        }
 
         table_frame = ttk.Frame(self.tab_accepted)
         table_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
@@ -380,42 +396,55 @@ class WyjatkiApp(tk.Tk):
         df_d = self._current_df
         cols = _row_columns(df_d, cat)
         labels = []
-        keys = []
+        records = []
         for iid in sel:
             row = df_d.iloc[self._row_index_map[iid]]
-            nr_dok = _norm(row.get("Nr dok. SAP", ""))
-            inv    = _norm(row.get("Nr faktury KSeF", ""))
             labels.append("  |  ".join(f"{c}: {_norm(row.get(c, ''))}" for c in cols))
-            keys.append((nr_dok, inv))
+            records.append({db_col: _norm(row.get(df_col, "")) for df_col, db_col in SNAPSHOT_FIELDS.items()})
 
         dialog = CommentDialog(self, labels)
         if dialog.result is None:
             return
+        komentarz = dialog.result
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        for (nr_dok, inv), komentarz in zip(keys, dialog.result):
+        db_cols = list(SNAPSHOT_FIELDS.values())
+        placeholders = ", ".join("?" for _ in db_cols)
+        for rec in records:
+            # Brak ograniczenia UNIQUE w bazie (klucz_laczenia nie jest unikatowy) —
+            # rowny wpis usuwamy recznie przed ponownym dodaniem, zamiast polegac
+            # na bazodanowym INSERT OR REPLACE.
             self.conn.execute(
-                """
-                INSERT OR REPLACE INTO wyjatki_akceptacja
-                    (regula, numer_dokumentu, invoice_number, komentarz, data_akceptacji)
-                VALUES (?, ?, ?, ?, ?)
+                "DELETE FROM wyjatki_akceptacja "
+                "WHERE regula = ? AND klucz_laczenia = ? AND numer_dokumentu = ? AND invoice_number = ?",
+                (cat, rec["klucz_laczenia"], rec["numer_dokumentu"], rec["invoice_number"]),
+            )
+            self.conn.execute(
+                f"""
+                INSERT INTO wyjatki_akceptacja
+                    (regula, {", ".join(db_cols)}, komentarz, data_akceptacji)
+                VALUES (?, {placeholders}, ?, ?)
                 """,
-                (cat, nr_dok, inv, komentarz, now),
+                (cat, *[rec[c] for c in db_cols], komentarz, now),
             )
         self.conn.commit()
-        messagebox.showinfo("Zapisano", f"Zaakceptowano {len(keys)} pozycji.")
+        messagebox.showinfo("Zapisano", f"Zaakceptowano {len(records)} pozycji.")
         self.reload_disc()
 
     def _reload_accepted(self):
         for item in self.accepted_tree.get_children():
             self.accepted_tree.delete(item)
         rows = self.conn.execute(
-            "SELECT id, regula, numer_dokumentu, invoice_number, komentarz, data_akceptacji "
-            "FROM wyjatki_akceptacja ORDER BY regula, data_akceptacji"
+            "SELECT id, regula, klucz_laczenia, numer_dokumentu, invoice_number, rodzaj_dokumentu, "
+            "referencja_sap, data_dokumentu, data_ksiegowania, data_wystawienia, nabywca, kwota_brutto, "
+            "komentarz, data_akceptacji FROM wyjatki_akceptacja ORDER BY regula, data_akceptacji"
         ).fetchall()
-        for rid, regula, nr_dok, inv, komentarz, data_akc in rows:
-            dokumenty = nr_dok if nr_dok else inv
-            self.accepted_tree.insert("", "end", iid=str(rid), values=(regula, dokumenty, komentarz, data_akc))
+        for (rid, regula, klucz, nr_dok, inv, rodzaj, referencja, data_dok,
+             data_ksieg, data_wyst, nabywca, brutto, komentarz, data_akc) in rows:
+            self.accepted_tree.insert("", "end", iid=str(rid), values=(
+                regula, klucz, nr_dok, inv, rodzaj, referencja,
+                data_dok, data_ksieg, data_wyst, nabywca, brutto, komentarz, data_akc,
+            ))
 
     def _unaccept_selected(self):
         sel = self.accepted_tree.selection()
@@ -434,14 +463,10 @@ class WyjatkiApp(tk.Tk):
 def _fix_legacy_nan_keys(conn: sqlite3.Connection) -> None:
     """Naprawia wpisy zapisane przed poprawka, gdzie pusta wartosc trafila do bazy
     jako literalny string 'nan' (np. 'Nr faktury KSeF' dla wierszy Tylko_SAP)."""
-    conn.execute(
-        "UPDATE wyjatki_akceptacja SET numer_dokumentu = '' "
-        "WHERE LOWER(numer_dokumentu) IN ('nan', 'none', 'nat')"
-    )
-    conn.execute(
-        "UPDATE wyjatki_akceptacja SET invoice_number = '' "
-        "WHERE LOWER(invoice_number) IN ('nan', 'none', 'nat')"
-    )
+    for col in ("klucz_laczenia", "numer_dokumentu", "invoice_number"):
+        conn.execute(
+            f"UPDATE wyjatki_akceptacja SET {col} = '' WHERE LOWER({col}) IN ('nan', 'none', 'nat')"
+        )
     conn.commit()
 
 
