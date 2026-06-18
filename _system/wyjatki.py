@@ -54,6 +54,23 @@ def _row_columns(df: pd.DataFrame, regula: str) -> list[str]:
     return cols
 
 
+def _norm(value) -> str:
+    """Normalizuje wartosc komorki do porownywalnego stringa ('' dla pustych/NaN)."""
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    s = str(value).strip()
+    return "" if s.lower() in ("nan", "none", "nat") else s
+
+
+SEARCH_COLS = ["Nr dok. SAP", "Nr faktury KSeF", "Referencja SAP"]
+DATE_COL = "Data dok. SAP"
+
+
 # ── Pomocniczy scrollowany kontener ───────────────────────────────────────────
 class ScrollableFrame(ttk.Frame):
     def __init__(self, parent, height: int = 320):
@@ -128,6 +145,7 @@ class WyjatkiApp(tk.Tk):
 
         self.disc: dict[str, pd.DataFrame] = {}
         self._row_index_map: dict[str, int] = {}
+        self._current_df: pd.DataFrame = pd.DataFrame()
 
         notebook = ttk.Notebook(self)
         notebook.pack(fill="both", expand=True)
@@ -158,14 +176,101 @@ class WyjatkiApp(tk.Tk):
 
         ttk.Button(top, text="Odswiez dane", command=self.reload_disc).pack(side="left", padx=10)
 
-        self.tree = ttk.Treeview(self.tab_niezg, show="headings", selectmode="extended")
-        self.tree.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        # ── Pasek wyszukiwania ──────────────────────────────────────────────
+        search_bar = ttk.LabelFrame(self.tab_niezg, text="Wyszukiwanie")
+        search_bar.pack(fill="x", padx=10, pady=(0, 8))
+
+        left = ttk.Frame(search_bar)
+        left.pack(side="left", fill="both", expand=True, padx=(8, 4), pady=6)
+        ttk.Label(
+            left,
+            text=f"Numery ({', '.join(SEARCH_COLS)}) — mozna wkleic wiele (Ctrl+V), kazdy w nowej linii lub po przecinku:",
+        ).pack(anchor="w")
+        self.search_text = tk.Text(left, height=3, width=50, wrap="word")
+        self.search_text.pack(fill="x", pady=(2, 0))
+
+        right = ttk.Frame(search_bar)
+        right.pack(side="left", padx=(4, 8), pady=6)
+        ttk.Label(right, text=f"{DATE_COL} od (YYYY-MM-DD):").grid(row=0, column=0, sticky="w")
+        self.date_from_var = tk.StringVar()
+        ttk.Entry(right, textvariable=self.date_from_var, width=14).grid(row=0, column=1, padx=(4, 0))
+        ttk.Label(right, text=f"{DATE_COL} do (YYYY-MM-DD):").grid(row=1, column=0, sticky="w", pady=(4, 0))
+        self.date_to_var = tk.StringVar()
+        ttk.Entry(right, textvariable=self.date_to_var, width=14).grid(row=1, column=1, padx=(4, 0), pady=(4, 0))
+
+        btns_frame = ttk.Frame(right)
+        btns_frame.grid(row=2, column=0, columnspan=2, pady=(6, 0))
+        ttk.Button(btns_frame, text="Szukaj",  command=self._show_category).pack(side="left", padx=(0, 6))
+        ttk.Button(btns_frame, text="Wyczysc", command=self._clear_search).pack(side="left")
+
+        # ── Tabela wynikow + scrollbary ──────────────────────────────────────
+        table_frame = ttk.Frame(self.tab_niezg)
+        table_frame.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        table_frame.rowconfigure(0, weight=1)
+        table_frame.columnconfigure(0, weight=1)
+
+        self.tree = ttk.Treeview(table_frame, show="headings", selectmode="extended")
+        vsb = ttk.Scrollbar(table_frame, orient="vertical",   command=self.tree.yview)
+        hsb = ttk.Scrollbar(table_frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
 
         bottom = ttk.Frame(self.tab_niezg)
         bottom.pack(fill="x", padx=10, pady=(0, 10))
         self.count_label = ttk.Label(bottom, text="")
         self.count_label.pack(side="left")
         ttk.Button(bottom, text="Zaakceptuj zaznaczone", command=self._accept_selected).pack(side="right")
+
+    def _clear_search(self):
+        self.search_text.delete("1.0", "end")
+        self.date_from_var.set("")
+        self.date_to_var.set("")
+        self._show_category()
+
+    def _search_tokens(self) -> list[str]:
+        raw = self.search_text.get("1.0", "end")
+        tokens = []
+        for line in raw.replace(",", "\n").splitlines():
+            t = line.strip()
+            if t:
+                tokens.append(t)
+        return tokens
+
+    def _apply_filters(self, df_d: pd.DataFrame, cat: str) -> pd.DataFrame:
+        if df_d.empty:
+            return df_d
+
+        mask = pd.Series(True, index=df_d.index)
+
+        tokens = self._search_tokens()
+        if tokens:
+            cols = [c for c in SEARCH_COLS if c in df_d.columns]
+            if cols:
+                row_mask = pd.Series(False, index=df_d.index)
+                for c in cols:
+                    norm_col = df_d[c].map(_norm)
+                    for tok in tokens:
+                        row_mask |= norm_col.str.contains(tok, case=False, regex=False, na=False)
+                mask &= row_mask
+            else:
+                mask &= False
+
+        date_from = self.date_from_var.get().strip()
+        date_to   = self.date_to_var.get().strip()
+        if (date_from or date_to) and DATE_COL in df_d.columns:
+            dates = pd.to_datetime(df_d[DATE_COL], errors="coerce")
+            if date_from:
+                d_from = pd.to_datetime(date_from, errors="coerce")
+                if pd.notna(d_from):
+                    mask &= dates >= d_from
+            if date_to:
+                d_to = pd.to_datetime(date_to, errors="coerce")
+                if pd.notna(d_to):
+                    mask &= dates <= d_to
+
+        return df_d[mask].reset_index(drop=True)
 
     # ── Zakladka: zaakceptowane wyjatki ───────────────────────────────────────
     def _build_accepted_tab(self):
@@ -178,11 +283,21 @@ class WyjatkiApp(tk.Tk):
         headers = {"regula": "Regula", "dokumenty": "Dokumenty", "komentarz": "Komentarz", "data": "Data akceptacji"}
         widths  = {"regula": 220, "dokumenty": 220, "komentarz": 360, "data": 140}
 
-        self.accepted_tree = ttk.Treeview(self.tab_accepted, columns=cols, show="headings", selectmode="extended")
+        table_frame = ttk.Frame(self.tab_accepted)
+        table_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        table_frame.rowconfigure(0, weight=1)
+        table_frame.columnconfigure(0, weight=1)
+
+        self.accepted_tree = ttk.Treeview(table_frame, columns=cols, show="headings", selectmode="extended")
         for c in cols:
             self.accepted_tree.heading(c, text=headers[c])
             self.accepted_tree.column(c, width=widths[c], anchor="w")
-        self.accepted_tree.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        vsb = ttk.Scrollbar(table_frame, orient="vertical",   command=self.accepted_tree.yview)
+        hsb = ttk.Scrollbar(table_frame, orient="horizontal", command=self.accepted_tree.xview)
+        self.accepted_tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        self.accepted_tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
 
     def _on_tab_changed(self, _event):
         if self.notebook.index(self.notebook.select()) == 1:
@@ -217,16 +332,24 @@ class WyjatkiApp(tk.Tk):
         for item in self.tree.get_children():
             self.tree.delete(item)
         self._row_index_map = {}
+        self._current_df = pd.DataFrame()
 
         if cat is None:
             self.tree["columns"] = ()
             self.count_label.config(text="")
             return
 
-        df_d = self.disc.get(cat)
-        if df_d is None or df_d.empty:
+        df_full = self.disc.get(cat)
+        if df_full is None or df_full.empty:
             self.tree["columns"] = ()
             self.count_label.config(text="Brak pozycji w tej kategorii.")
+            return
+
+        df_d = self._apply_filters(df_full, cat)
+        self._current_df = df_d
+        if df_d.empty:
+            self.tree["columns"] = ()
+            self.count_label.config(text=f"0 z {len(df_full)} pozycji (po filtrowaniu).")
             return
 
         cols = _row_columns(df_d, cat)
@@ -237,10 +360,13 @@ class WyjatkiApp(tk.Tk):
 
         for i, row in df_d.reset_index(drop=True).iterrows():
             iid = str(i)
-            self.tree.insert("", "end", iid=iid, values=[row.get(c, "") for c in cols])
+            self.tree.insert("", "end", iid=iid, values=[_norm(row.get(c, "")) for c in cols])
             self._row_index_map[iid] = i
 
-        self.count_label.config(text=f"{len(df_d)} pozycji")
+        if len(df_d) == len(df_full):
+            self.count_label.config(text=f"{len(df_d)} pozycji")
+        else:
+            self.count_label.config(text=f"{len(df_d)} z {len(df_full)} pozycji (po filtrowaniu)")
 
     def _accept_selected(self):
         cat = self._current_category()
@@ -251,15 +377,15 @@ class WyjatkiApp(tk.Tk):
             messagebox.showinfo("Brak wyboru", "Zaznacz co najmniej jedna pozycje.")
             return
 
-        df_d = self.disc[cat]
+        df_d = self._current_df
         cols = _row_columns(df_d, cat)
         labels = []
         keys = []
         for iid in sel:
             row = df_d.iloc[self._row_index_map[iid]]
-            nr_dok = str(row.get("Nr dok. SAP", "") or "")
-            inv    = str(row.get("Nr faktury KSeF", "") or "")
-            labels.append("  |  ".join(f"{c}: {row.get(c, '')}" for c in cols))
+            nr_dok = _norm(row.get("Nr dok. SAP", ""))
+            inv    = _norm(row.get("Nr faktury KSeF", ""))
+            labels.append("  |  ".join(f"{c}: {_norm(row.get(c, ''))}" for c in cols))
             keys.append((nr_dok, inv))
 
         dialog = CommentDialog(self, labels)
@@ -305,6 +431,20 @@ class WyjatkiApp(tk.Tk):
         self.reload_disc()
 
 
+def _fix_legacy_nan_keys(conn: sqlite3.Connection) -> None:
+    """Naprawia wpisy zapisane przed poprawka, gdzie pusta wartosc trafila do bazy
+    jako literalny string 'nan' (np. 'Nr faktury KSeF' dla wierszy Tylko_SAP)."""
+    conn.execute(
+        "UPDATE wyjatki_akceptacja SET numer_dokumentu = '' "
+        "WHERE LOWER(numer_dokumentu) IN ('nan', 'none', 'nat')"
+    )
+    conn.execute(
+        "UPDATE wyjatki_akceptacja SET invoice_number = '' "
+        "WHERE LOWER(invoice_number) IN ('nan', 'none', 'nat')"
+    )
+    conn.commit()
+
+
 def main():
     if not DB_PATH.exists():
         root = tk.Tk()
@@ -318,6 +458,7 @@ def main():
     conn = sqlite3.connect(DB_PATH)
     _ensure_indexes(conn)
     _ensure_wyjatki_table(conn)
+    _fix_legacy_nan_keys(conn)
 
     app = WyjatkiApp(conn)
     app.mainloop()
