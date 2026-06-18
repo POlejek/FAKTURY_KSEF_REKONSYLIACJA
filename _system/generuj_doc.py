@@ -222,20 +222,21 @@ for label, desc in ekst_steps:
 pdf.h1("6. Wyjatki.exe – akceptowanie i przegląd wyjątków")
 pdf.body(
     "Niektóre niezgodności są znane i biznesowo wyjaśnione – nie trzeba, żeby pojawiały się "
-    "w każdym kolejnym raporcie. Wyjatki.exe pozwala oznaczyć wybraną pozycję (z dowolnej "
-    "zakładki Niezg_1..Niezg_9 oraz Tylko_SAP / Tylko_KSeF) jako zaakceptowany wyjątek "
-    "wraz z komentarzem, a także przejrzeć i odznaczyć wyjątki w razie pomyłki."
+    "w każdym kolejnym raporcie. Wyjatki.exe to aplikacja okienkowa (GUI), która pozwala "
+    "oznaczyć wybraną pozycję (z dowolnej zakładki Niezg_1..Niezg_9 oraz Tylko_SAP / Tylko_KSeF) "
+    "jako zaakceptowany wyjątek wraz z komentarzem, a także przejrzeć i odznaczyć wyjątki "
+    "w razie pomyłki."
 )
 pdf.ln(1)
 wyj_steps = [
-    ("Krok 1", "Wybierz opcję [1] z menu, aby przeglądnąć bieżące niezgodności pogrupowane "
-               "po zakładkach (Niezg_1..Niezg_9, Tylko_SAP, Tylko_KSeF)."),
-    ("Krok 2", "Dla wybranej zakładki wpisz numery pozycji do zaakceptowania (np. 1,3) "
-               "lub naciśnij Enter, aby pominąć tę zakładkę."),
-    ("Krok 3", "Dla każdej zaakceptowanej pozycji wpisz komentarz wyjaśniający – "
-               "pole jest wymagane, nie można go pozostawić puste."),
-    ("Krok 4", "Wybierz opcję [2], aby przeglądnąć listę już zaakceptowanych wyjątków "
-               "i odznaczyć wybrane (po potwierdzeniu T/N) – wrócą one do kolejnego raportu."),
+    ("Krok 1", "Na zakładce 'Niezgodnosci' wybierz kategorię z listy rozwijanej "
+               "(Niezg_1..Niezg_9, Tylko_SAP, Tylko_KSeF) – tabela pokaże jej pozycje."),
+    ("Krok 2", "Zaznacz myszką jedną lub wiele pozycji w tabeli (Ctrl/Shift + klik) "
+               "i kliknij 'Zaakceptuj zaznaczone'."),
+    ("Krok 3", "W oknie, które się otworzy, wpisz komentarz wyjaśniający dla każdej "
+               "zaznaczonej pozycji – pole jest wymagane, nie można go pozostawić puste."),
+    ("Krok 4", "Na zakładce 'Zaakceptowane wyjatki' zaznacz wybrane wiersze i kliknij "
+               "'Odznacz zaznaczone' (po potwierdzeniu) – wrócą one do kolejnego raportu."),
 ]
 for label, desc in wyj_steps:
     pdf.step(label, desc)

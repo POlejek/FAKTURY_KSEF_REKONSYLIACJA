@@ -47,7 +47,7 @@ if errorlevel 1 (
 
 echo.
 echo [6/6] Budowanie Wyjatki.exe...
-pyinstaller --onefile --clean --name "Wyjatki" wyjatki.py
+pyinstaller --onefile --windowed --clean --name "Wyjatki" wyjatki.py
 if errorlevel 1 (
     echo BLAD przy budowaniu Wyjatki.exe
     pause & exit /b 1
