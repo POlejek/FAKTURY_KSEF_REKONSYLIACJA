@@ -88,7 +88,12 @@ def _norm_val(v) -> str:
 
 def _ensure_wyjatki_table(conn: sqlite3.Connection) -> None:
     """Tworzy tabelę wyjątków, jeśli baza powstała przed dodaniem tej funkcji,
-    i dokłada (migruje) kolumny dodane w późniejszych wersjach."""
+    i dokłada (migruje) kolumny dodane w późniejszych wersjach.
+
+    Bez ograniczenia UNIQUE — klucz_laczenia nie jest gwarantowany jako unikatowy
+    (np. korekty/RV+DR moga go dzielic), wiec deduplikacja przy akceptacji jest
+    robiona recznie (DELETE + INSERT) w wyjatki.py, a nie przez baze danych.
+    """
     conn.execute("""
         CREATE TABLE IF NOT EXISTS wyjatki_akceptacja (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,8 +109,7 @@ def _ensure_wyjatki_table(conn: sqlite3.Connection) -> None:
             nabywca          TEXT NOT NULL DEFAULT '',
             kwota_brutto     TEXT NOT NULL DEFAULT '',
             komentarz        TEXT NOT NULL,
-            data_akceptacji  TEXT NOT NULL,
-            UNIQUE(regula, klucz_laczenia, numer_dokumentu, invoice_number)
+            data_akceptacji  TEXT NOT NULL
         )
     """)
     existing = {r[1] for r in conn.execute("PRAGMA table_info(wyjatki_akceptacja)").fetchall()}
@@ -113,10 +117,30 @@ def _ensure_wyjatki_table(conn: sqlite3.Connection) -> None:
     for col in migration_cols:
         if col not in existing:
             conn.execute(f"ALTER TABLE wyjatki_akceptacja ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
-    conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_wyjatki_key "
-        "ON wyjatki_akceptacja(regula, klucz_laczenia, numer_dokumentu, invoice_number)"
+
+    # Usuniecie ograniczenia UNIQUE z wczesniejszej wersji bazy — klucz_laczenia nie jest
+    # unikatowy, wiec taki constraint moglby blokowac/nadpisywac poprawne, odrebne wpisy.
+    conn.execute("DROP INDEX IF EXISTS idx_wyjatki_key")
+    legacy_unique = any(
+        idx[3] == "u" for idx in conn.execute("PRAGMA index_list(wyjatki_akceptacja)").fetchall()
     )
+    if legacy_unique:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(wyjatki_akceptacja)").fetchall()]
+        data_cols = [c for c in cols if c != "id"]
+        conn.execute(f"""
+            CREATE TABLE wyjatki_akceptacja_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                {", ".join(f"{c} TEXT" for c in data_cols)}
+            )
+        """)
+        col_list = ", ".join(data_cols)
+        conn.execute(
+            f"INSERT INTO wyjatki_akceptacja_new ({col_list}) "
+            f"SELECT {col_list} FROM wyjatki_akceptacja"
+        )
+        conn.execute("DROP TABLE wyjatki_akceptacja")
+        conn.execute("ALTER TABLE wyjatki_akceptacja_new RENAME TO wyjatki_akceptacja")
+
     conn.commit()
 
 

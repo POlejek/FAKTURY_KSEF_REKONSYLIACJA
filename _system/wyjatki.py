@@ -411,9 +411,17 @@ class WyjatkiApp(tk.Tk):
         db_cols = list(SNAPSHOT_FIELDS.values())
         placeholders = ", ".join("?" for _ in db_cols)
         for rec in records:
+            # Brak ograniczenia UNIQUE w bazie (klucz_laczenia nie jest unikatowy) —
+            # rowny wpis usuwamy recznie przed ponownym dodaniem, zamiast polegac
+            # na bazodanowym INSERT OR REPLACE.
+            self.conn.execute(
+                "DELETE FROM wyjatki_akceptacja "
+                "WHERE regula = ? AND klucz_laczenia = ? AND numer_dokumentu = ? AND invoice_number = ?",
+                (cat, rec["klucz_laczenia"], rec["numer_dokumentu"], rec["invoice_number"]),
+            )
             self.conn.execute(
                 f"""
-                INSERT OR REPLACE INTO wyjatki_akceptacja
+                INSERT INTO wyjatki_akceptacja
                     (regula, {", ".join(db_cols)}, komentarz, data_akceptacji)
                 VALUES (?, {placeholders}, ?, ?)
                 """,
