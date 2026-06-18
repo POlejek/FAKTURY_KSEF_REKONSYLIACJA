@@ -176,14 +176,6 @@ def _filter_accepted(df: pd.DataFrame, regula: str, accepted: dict) -> pd.DataFr
     return df[mask].reset_index(drop=True)
 
 
-def _wyjatek_komentarz_col(df: pd.DataFrame, regula: str, accepted: dict) -> pd.Series:
-    """Zwraca Series z komentarzem wyjątku dla wierszy zaakceptowanych, '' dla pozostałych."""
-    if df.empty:
-        return pd.Series([], dtype=str, index=df.index)
-    keys = _keys_for(df, regula)
-    return pd.Series([accepted.get(k, "") for k in keys], index=df.index)
-
-
 # ── Rekoncyliacja w pandas ────────────────────────────────────────────────────
 SAP_LOAD_COLS  = [
     "rok_obrotowy", "okres_sprawozdawczy", "rodzaj_dokumentu",
@@ -584,7 +576,6 @@ def main():
     df_all, disc, df_log, df_sap_full, df_ksef_full = compute_report_data(conn)
     print("OK")
 
-    accepted   = _load_accepted(conn)
     df_sum     = _make_summary(conn, df_all)
     df_wyjatki = pd.read_sql(
         """
@@ -609,14 +600,12 @@ def main():
 
     df_match = df_all[df_all["Status"] == "DOPASOWANE"]
 
-    # Zakładki Tylko_SAP / Tylko_KSeF w głównym raporcie pokazują WSZYSTKIE rekordy
-    # (inwentaryzacja) — z dodatkową kolumną komentarza dla pozycji już zaakceptowanych.
-    df_sap_  = df_sap_full.copy()
-    df_ksef_ = df_ksef_full.copy()
-    df_sap_["Wyjatek_Komentarz"]  = _wyjatek_komentarz_col(df_sap_full,  "Tylko_SAP",  accepted)
-    df_ksef_["Wyjatek_Komentarz"] = _wyjatek_komentarz_col(df_ksef_full, "Tylko_KSeF", accepted)
+    # Zakładki Tylko_SAP / Tylko_KSeF w głównym raporcie, tak jak Niezg_X, pokazują
+    # tylko pozycje, które NIE zostały zaakceptowane jako wyjątek (disc jest już
+    # odfiltrowane przez compute_report_data).
+    df_sap_  = disc["Tylko_SAP"]
+    df_ksef_ = disc["Tylko_KSeF"]
 
-    # Niezg_X w disc to wersje już odfiltrowane o zaakceptowane wyjątki (do excela).
     disc_report = {k: v for k, v in disc.items() if k not in ("Tylko_SAP", "Tylko_KSeF")}
 
     print(f"  Dopasowane : {len(df_match):>6,}")

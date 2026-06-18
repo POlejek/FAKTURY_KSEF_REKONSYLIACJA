@@ -283,6 +283,33 @@ class WyjatkiApp(tk.Tk):
         ttk.Button(top, text="Odswiez",             command=self._reload_accepted).pack(side="left")
         ttk.Button(top, text="Odznacz zaznaczone",  command=self._unaccept_selected).pack(side="left", padx=10)
 
+        # ── Pasek wyszukiwania ──────────────────────────────────────────────
+        search_bar = ttk.LabelFrame(self.tab_accepted, text="Wyszukiwanie")
+        search_bar.pack(fill="x", padx=10, pady=(0, 8))
+
+        left = ttk.Frame(search_bar)
+        left.pack(side="left", fill="both", expand=True, padx=(8, 4), pady=6)
+        ttk.Label(
+            left,
+            text=f"Numery ({', '.join(SEARCH_COLS)}) — mozna wkleic wiele (Ctrl+V), kazdy w nowej linii lub po przecinku:",
+        ).pack(anchor="w")
+        self.acc_search_text = tk.Text(left, height=3, width=50, wrap="word")
+        self.acc_search_text.pack(fill="x", pady=(2, 0))
+
+        right = ttk.Frame(search_bar)
+        right.pack(side="left", padx=(4, 8), pady=6)
+        ttk.Label(right, text=f"{DATE_COL} od (YYYY-MM-DD):").grid(row=0, column=0, sticky="w")
+        self.acc_date_from_var = tk.StringVar()
+        ttk.Entry(right, textvariable=self.acc_date_from_var, width=14).grid(row=0, column=1, padx=(4, 0))
+        ttk.Label(right, text=f"{DATE_COL} do (YYYY-MM-DD):").grid(row=1, column=0, sticky="w", pady=(4, 0))
+        self.acc_date_to_var = tk.StringVar()
+        ttk.Entry(right, textvariable=self.acc_date_to_var, width=14).grid(row=1, column=1, padx=(4, 0), pady=(4, 0))
+
+        btns_frame = ttk.Frame(right)
+        btns_frame.grid(row=2, column=0, columnspan=2, pady=(6, 0))
+        ttk.Button(btns_frame, text="Szukaj",  command=self._reload_accepted).pack(side="left", padx=(0, 6))
+        ttk.Button(btns_frame, text="Wyczysc", command=self._clear_accepted_search).pack(side="left")
+
         cols = (
             "regula", "klucz", "sap", "ksef", "rodzaj", "referencja",
             "data_dok", "data_ksieg", "data_wyst", "nabywca", "brutto", "komentarz", "data",
@@ -314,6 +341,26 @@ class WyjatkiApp(tk.Tk):
         self.accepted_tree.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
         hsb.grid(row=1, column=0, sticky="ew")
+
+        bottom = ttk.Frame(self.tab_accepted)
+        bottom.pack(fill="x", padx=10, pady=(0, 10))
+        self.accepted_count_label = ttk.Label(bottom, text="")
+        self.accepted_count_label.pack(side="left")
+
+    def _clear_accepted_search(self):
+        self.acc_search_text.delete("1.0", "end")
+        self.acc_date_from_var.set("")
+        self.acc_date_to_var.set("")
+        self._reload_accepted()
+
+    def _accepted_search_tokens(self) -> list[str]:
+        raw = self.acc_search_text.get("1.0", "end")
+        tokens = []
+        for line in raw.replace(",", "\n").splitlines():
+            t = line.strip()
+            if t:
+                tokens.append(t)
+        return tokens
 
     def _on_tab_changed(self, _event):
         if self.notebook.index(self.notebook.select()) == 1:
@@ -439,12 +486,42 @@ class WyjatkiApp(tk.Tk):
             "referencja_sap, data_dokumentu, data_ksiegowania, data_wystawienia, nabywca, kwota_brutto, "
             "komentarz, data_akceptacji FROM wyjatki_akceptacja ORDER BY regula, data_akceptacji"
         ).fetchall()
+
+        total = len(rows)
+        tokens = self._accepted_search_tokens()
+        date_from = self.acc_date_from_var.get().strip()
+        date_to   = self.acc_date_to_var.get().strip()
+        d_from = pd.to_datetime(date_from, errors="coerce") if date_from else None
+        d_to   = pd.to_datetime(date_to, errors="coerce") if date_to else None
+
+        # Kolumny przeszukiwane tekstowo odpowiadaja SEARCH_COLS (Klucz laczenia,
+        # Nr dok. SAP, Nr faktury KSeF, Referencja SAP); DATE_COL odpowiada data_dok.
+        shown = 0
         for (rid, regula, klucz, nr_dok, inv, rodzaj, referencja, data_dok,
              data_ksieg, data_wyst, nabywca, brutto, komentarz, data_akc) in rows:
+            if tokens:
+                searchable = [_norm(klucz), _norm(nr_dok), _norm(inv), _norm(referencja)]
+                if not any(tok.lower() in s.lower() for tok in tokens for s in searchable):
+                    continue
+            if d_from is not None or d_to is not None:
+                d = pd.to_datetime(data_dok, errors="coerce")
+                if pd.isna(d):
+                    continue
+                if d_from is not None and pd.notna(d_from) and d < d_from:
+                    continue
+                if d_to is not None and pd.notna(d_to) and d > d_to:
+                    continue
+
             self.accepted_tree.insert("", "end", iid=str(rid), values=(
                 regula, klucz, nr_dok, inv, rodzaj, referencja,
                 data_dok, data_ksieg, data_wyst, nabywca, brutto, komentarz, data_akc,
             ))
+            shown += 1
+
+        if shown == total:
+            self.accepted_count_label.config(text=f"{shown} pozycji")
+        else:
+            self.accepted_count_label.config(text=f"{shown} z {total} pozycji (po filtrowaniu)")
 
     def _unaccept_selected(self):
         sel = self.accepted_tree.selection()
