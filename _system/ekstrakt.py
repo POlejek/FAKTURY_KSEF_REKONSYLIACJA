@@ -11,6 +11,8 @@ import pandas as pd
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 
+from raport import _ensure_wyjatki_table
+
 
 def _resolve_dirs() -> tuple[Path, Path]:
     """Zwraca (app_dir, base_dir) niezależnie od tego, czy exe jest w _system\ czy w folderze głównym."""
@@ -155,6 +157,7 @@ def main():
     RAPORTY.mkdir(parents=True, exist_ok=True)
 
     conn = sqlite3.connect(DB_PATH)
+    _ensure_wyjatki_table(conn)
 
     print("Wczytywanie SAP  ...", end=" ", flush=True)
     df_sap  = pd.read_sql("SELECT * FROM faktury_sap",  conn)
@@ -163,6 +166,26 @@ def main():
     print("Wczytywanie KSeF ...", end=" ", flush=True)
     df_ksef = pd.read_sql("SELECT * FROM faktury_ksef", conn)
     print(f"{len(df_ksef):,} wierszy")
+
+    df_wyjatki = pd.read_sql(
+        """
+        SELECT regula           AS "Regula",
+               klucz_laczenia   AS "Klucz laczenia",
+               numer_dokumentu  AS "Nr dok. SAP",
+               invoice_number   AS "Nr faktury KSeF",
+               rodzaj_dokumentu AS "Rodzaj dok.",
+               referencja_sap   AS "Referencja SAP",
+               data_dokumentu   AS "Data dok. SAP",
+               data_ksiegowania AS "Data ksiegowania",
+               data_wystawienia AS "Data wystawienia",
+               nabywca          AS "Nabywca",
+               kwota_brutto     AS "Kwota brutto",
+               komentarz        AS "Komentarz",
+               data_akceptacji  AS "Data akceptacji"
+        FROM wyjatki_akceptacja ORDER BY regula, data_akceptacji
+        """,
+        conn,
+    )
     conn.close()
 
     print("Laczenie danych  ...", end=" ", flush=True)
@@ -198,7 +221,9 @@ def main():
     print(f"\nZapis Excel: {out_path.name} ...", end=" ", flush=True)
     with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
         df_out.to_excel(writer, sheet_name="Dopasowane", index=False)
+        df_wyjatki.to_excel(writer, sheet_name="Wyjatki_Zaakceptowane", index=False)
         _format_sheet(writer.book["Dopasowane"])
+        _format_sheet(writer.book["Wyjatki_Zaakceptowane"])
     print("OK")
 
     print(f"\nGotowe!  ({len(df_out):,} wierszy)")
